@@ -19,26 +19,12 @@
     body {
       display: grid;
       place-items: center;
-      touch-action: manipulation;
     }
     canvas {
       position: fixed;
       inset: 0;
       width: 100%;
       height: 100%;
-    }
-    .hint {
-      position: fixed;
-      left: 50%;
-      bottom: max(7vh, 42px);
-      transform: translateX(-50%);
-      color: rgba(255,255,255,.58);
-      font-size: 13px;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-      transition: opacity .8s ease;
-      user-select: none;
-      pointer-events: none;
     }
     .message {
       position: fixed;
@@ -49,7 +35,7 @@
       text-align: center;
       opacity: 0;
       pointer-events: none;
-      transition: opacity .9s ease, transform .9s ease;
+      transition: opacity 1.1s ease, transform 1.1s ease;
       text-shadow: 0 0 28px rgba(190,120,255,.7);
     }
     .message.show {
@@ -61,43 +47,34 @@
       font-weight: 500;
       letter-spacing: -.03em;
     }
-    .message .sub {
-      margin-top: 12px;
-      font-size: clamp(14px, 3.8vw, 19px);
-      color: rgba(255,255,255,.72);
-    }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
 
   <div class="message" id="message">
-    <div class="name">для Софийки ♡</div>
-    <div class="sub">просто хотел оставить тебе это</div>
+    <div class="name">for you ♡</div>
   </div>
 
-  <div class="hint" id="hint">нажми на сердце</div>
-
   <script>
-    // Здесь можно поменять текст, если захочешь.
-    const MESSAGE = "для Софийки ♡";
-    const SUBTITLE = "просто хотел оставить тебе это";
+    // Здесь можно поменять фразу.
+    const MESSAGE = "for you ♡";
+
+    // Сколько миллисекунд идёт сборка сердца из хаоса.
+    const ASSEMBLE_MS = 2600;
+    // Задержка перед появлением текста после того как сердце собралось.
+    const MESSAGE_DELAY_MS = 500;
 
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
     const message = document.getElementById("message");
-    const hint = document.getElementById("hint");
 
-    let w, h, dpr, particles = [], burst = 0, opened = false;
+    let w, h, dpr, particles = [];
+    let startTime = null;
+    let messageShown = false;
 
-    function resize() {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      w = innerWidth;
-      h = innerHeight;
-      canvas.width = Math.floor(w * dpr);
-      canvas.height = Math.floor(h * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      makeParticles();
+    function easeOutCubic(t) {
+      return 1 - Math.pow(1 - t, 3);
     }
 
     function heart(t) {
@@ -109,6 +86,16 @@
       };
     }
 
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = innerWidth;
+      h = innerHeight;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      makeParticles();
+    }
+
     function makeParticles() {
       particles = [];
       const count = Math.min(1250, Math.max(520, Math.floor(w * h / 1550)));
@@ -118,96 +105,92 @@
         const t = Math.random() * Math.PI * 2;
         const p = heart(t);
 
-        // Небольшой разброс вокруг линии сердца.
+        // Целевая точка на контуре сердца (с небольшим разбросом толщины).
         const thickness = Math.pow(Math.random(), 2.2) * 2.7;
         const a = Math.random() * Math.PI * 2;
+        const targetX = p.x * scale + Math.cos(a) * thickness;
+        const targetY = p.y * scale + Math.sin(a) * thickness;
+
+        // Стартовая точка — хаотично раскидана по экрану.
+        const angle = Math.random() * Math.PI * 2;
+        const radius = (Math.min(w, h) * 0.55) + Math.random() * Math.min(w, h) * 0.6;
+        const startX = Math.cos(angle) * radius;
+        const startY = Math.sin(angle) * radius;
 
         particles.push({
-          t,
-          x: p.x * scale + Math.cos(a) * thickness,
-          y: p.y * scale + Math.sin(a) * thickness,
+          startX, startY,
+          targetX, targetY,
           phase: Math.random() * Math.PI * 2,
           speed: .35 + Math.random() * .9,
           size: .7 + Math.random() * 1.8,
-          alpha: .35 + Math.random() * .65
+          alpha: .35 + Math.random() * .65,
+          delay: Math.random() * 0.35 // разброс старта, чтобы частицы летели не строем
         });
       }
     }
 
     function draw(time) {
+      if (startTime === null) startTime = time;
+      const elapsed = time - startTime;
+
       ctx.clearRect(0, 0, w, h);
 
       const cx = w / 2;
       const cy = h / 2 - Math.min(h * .01, 10);
-      const scale = Math.min(w, h) * 0.0175;
 
-      // Мягкое свечение.
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
 
       for (const p of particles) {
-        const pulse = 1 + Math.sin(time * .0022 + p.phase) * .025;
-        const drift = Math.sin(time * .001 * p.speed + p.phase) * .75;
-        const x = cx + p.x * pulse + drift;
-        const y = cy + p.y * pulse;
+        // Прогресс сборки для конкретной частицы (с индивидуальной задержкой).
+        const raw = Math.min(1, Math.max(0, (elapsed / ASSEMBLE_MS) - p.delay) / (1 - p.delay));
+        const eased = easeOutCubic(raw);
 
-        let alpha = p.alpha;
-        let size = p.size;
+        const baseX = p.startX + (p.targetX - p.startX) * eased;
+        const baseY = p.startY + (p.targetY - p.startY) * eased;
 
-        if (burst > 0) {
-          const dx = p.x / scale;
-          const dy = p.y / scale;
-          const len = Math.hypot(dx, dy) || 1;
-          const force = burst * (0.6 + Math.random() * .5);
-          // Burst вычисляется мягко, чтобы сердце не исчезало полностью.
-          alpha *= .65 + .35 * Math.cos(burst * 10);
-          size *= 1 + force * .35;
-        }
+        // Лёгкое дыхание/дрейф — усиливается по мере сборки.
+        const pulse = 1 + Math.sin(time * .0022 + p.phase) * .02 * eased;
+        const drift = Math.sin(time * .001 * p.speed + p.phase) * .75 * eased;
 
-        ctx.fillStyle = `rgba(177, 112, 255, ${alpha})`;
+        const x = cx + baseX * pulse + drift;
+        const y = cy + baseY * pulse;
+
+        ctx.fillStyle = `rgba(177, 112, 255, ${p.alpha * (0.4 + 0.6 * eased)})`;
         ctx.beginPath();
-        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.arc(x, y, p.size, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      // Несколько крупных "искр".
-      for (let i = 0; i < 28; i++) {
-        const p = particles[(i * 43) % particles.length];
-        const x = cx + p.x + Math.sin(time * .001 + i) * 2;
-        const y = cy + p.y + Math.cos(time * .0012 + i) * 2;
-        const s = 1.5 + Math.sin(time * .003 + i) * .7;
-        ctx.fillStyle = "rgba(205, 157, 255, .75)";
-        ctx.beginPath();
-        ctx.arc(x, y, s, 0, Math.PI * 2);
-        ctx.fill();
+      // Несколько крупных "искр" — включаются, когда сердце почти собрано.
+      const sparkStrength = Math.min(1, Math.max(0, (elapsed / ASSEMBLE_MS) - 0.7) / 0.3);
+      if (sparkStrength > 0) {
+        for (let i = 0; i < 28; i++) {
+          const p = particles[(i * 43) % particles.length];
+          const x = cx + p.targetX + Math.sin(time * .001 + i) * 2;
+          const y = cy + p.targetY + Math.cos(time * .0012 + i) * 2;
+          const s = (1.5 + Math.sin(time * .003 + i) * .7) * sparkStrength;
+          ctx.fillStyle = `rgba(205, 157, 255, ${.75 * sparkStrength})`;
+          ctx.beginPath();
+          ctx.arc(x, y, s, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       ctx.restore();
 
-      if (burst > 0) burst *= .91;
+      // Текст появляется один раз, после того как сборка завершилась.
+      if (!messageShown && elapsed >= ASSEMBLE_MS + MESSAGE_DELAY_MS) {
+        messageShown = true;
+        message.classList.add("show");
+      }
+
       requestAnimationFrame(draw);
     }
 
-    function openHeart() {
-      if (opened) return;
-      opened = true;
-      burst = 1;
-      hint.style.opacity = "0";
-      message.classList.add("show");
-
-      // Короткий "вдох" сердца после клика.
-      setTimeout(() => {
-        message.classList.remove("show");
-        setTimeout(() => message.classList.add("show"), 350);
-      }, 1700);
-    }
-
-    canvas.addEventListener("click", openHeart);
-    canvas.addEventListener("touchend", openHeart, { passive: true });
     window.addEventListener("resize", resize);
 
     document.querySelector(".name").textContent = MESSAGE;
-    document.querySelector(".sub").textContent = SUBTITLE;
 
     resize();
     requestAnimationFrame(draw);
